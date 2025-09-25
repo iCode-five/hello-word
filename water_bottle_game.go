@@ -23,17 +23,21 @@ type Move struct {
 
 // WaterBottleGame represents the game state
 type WaterBottleGame struct {
-	bottles      []Bottle // All bottles in the game
-	N            int      // Total number of bottles
-	M            int      // Capacity of each bottle
-	J            int      // Number of empty bottles
-	K            int      // Number of different colors
-	emptyCount   int      // Current number of empty bottles
-	reverseSteps []Move   // Record of reverse operations for validation
+	bottles       []Bottle // All bottles in the game
+	jars          []Bottle // All jars in the game (auxiliary containers)
+	N             int      // Total number of bottles
+	M             int      // Capacity of each bottle
+	J             int      // Number of empty bottles
+	K             int      // Number of different colors
+	JarCount      int      // Number of jars
+	JarCapacity   int      // Capacity of each jar
+	emptyCount    int      // Current number of empty bottles
+	emptyJarCount int      // Current number of empty jars
+	reverseSteps  []Move   // Record of reverse operations for validation
 }
 
 // NewWaterBottleGame creates a new game with given parameters
-func NewWaterBottleGame(N, M, J, K int) (*WaterBottleGame, error) {
+func NewWaterBottleGame(N, M, J, K, JarCount, JarCapacity int) (*WaterBottleGame, error) {
 	if N <= J {
 		return nil, fmt.Errorf("total bottles (%d) must be greater than empty bottles (%d)", N, J)
 	}
@@ -43,6 +47,12 @@ func NewWaterBottleGame(N, M, J, K int) (*WaterBottleGame, error) {
 	if M <= 0 {
 		return nil, fmt.Errorf("bottle capacity (%d) must be positive", M)
 	}
+	if JarCount < 0 {
+		return nil, fmt.Errorf("jar count (%d) must be non-negative", JarCount)
+	}
+	if JarCount > 0 && JarCapacity <= 0 {
+		return nil, fmt.Errorf("jar capacity (%d) must be positive when jars exist", JarCapacity)
+	}
 
 	totalWater := (N - J) * M
 	if totalWater%M != 0 {
@@ -50,17 +60,26 @@ func NewWaterBottleGame(N, M, J, K int) (*WaterBottleGame, error) {
 	}
 
 	game := &WaterBottleGame{
-		bottles:    make([]Bottle, N),
-		N:          N,
-		M:          M,
-		J:          J,
-		K:          K,
-		emptyCount: J,
+		bottles:       make([]Bottle, N),
+		jars:          make([]Bottle, JarCount),
+		N:             N,
+		M:             M,
+		J:             J,
+		K:             K,
+		JarCount:      JarCount,
+		JarCapacity:   JarCapacity,
+		emptyCount:    J,
+		emptyJarCount: JarCount,
 	}
 
 	// Initialize empty bottles
 	for i := range game.bottles {
 		game.bottles[i] = make(Bottle, 0, M)
+	}
+
+	// Initialize empty jars
+	for i := range game.jars {
+		game.jars[i] = make(Bottle, 0, JarCapacity)
 	}
 
 	return game, nil
@@ -584,28 +603,56 @@ func (g *WaterBottleGame) validateReverseSteps() error {
 	return nil
 }
 
+// GameState represents the complete state of all containers
+type GameState struct {
+	bottles [][]Color
+	jars    [][]Color
+}
+
 // copyGameState creates a deep copy of the current game state
-func (g *WaterBottleGame) copyGameState() [][]Color {
-	state := make([][]Color, len(g.bottles))
-	for i, bottle := range g.bottles {
-		state[i] = make([]Color, len(bottle))
-		copy(state[i], bottle)
+func (g *WaterBottleGame) copyGameState() *GameState {
+	state := &GameState{
+		bottles: make([][]Color, len(g.bottles)),
+		jars:    make([][]Color, len(g.jars)),
 	}
+
+	for i, bottle := range g.bottles {
+		state.bottles[i] = make([]Color, len(bottle))
+		copy(state.bottles[i], bottle)
+	}
+
+	for i, jar := range g.jars {
+		state.jars[i] = make([]Color, len(jar))
+		copy(state.jars[i], jar)
+	}
+
 	return state
 }
 
 // restoreGameState restores the game to a previous state
-func (g *WaterBottleGame) restoreGameState(state [][]Color) {
-	for i, bottleState := range state {
+func (g *WaterBottleGame) restoreGameState(state *GameState) {
+	for i, bottleState := range state.bottles {
 		g.bottles[i] = make(Bottle, len(bottleState))
 		copy(g.bottles[i], bottleState)
 	}
 
-	// Recalculate empty count
+	for i, jarState := range state.jars {
+		g.jars[i] = make(Bottle, len(jarState))
+		copy(g.jars[i], jarState)
+	}
+
+	// Recalculate empty counts
 	g.emptyCount = 0
 	for _, bottle := range g.bottles {
 		if len(bottle) == 0 {
 			g.emptyCount++
+		}
+	}
+
+	g.emptyJarCount = 0
+	for _, jar := range g.jars {
+		if len(jar) == 0 {
+			g.emptyJarCount++
 		}
 	}
 }
@@ -624,25 +671,48 @@ func getColorName(color Color) string {
 	return fmt.Sprintf("色%d", color)
 }
 
-// tryAggressivePour performs random pours to create more mixing
-func (g *WaterBottleGame) Pour(fromBottle, toBottle int) (bool, int) {
-	if fromBottle < 0 || fromBottle >= g.N || toBottle < 0 || toBottle >= g.N {
-		return false, 0 // Invalid bottle indices
+// Pour performs water pouring between containers (bottles and jars)
+// Container indices: 0 to N-1 are bottles, N to N+JarCount-1 are jars
+func (g *WaterBottleGame) Pour(fromContainer, toContainer int) (bool, int) {
+	totalContainers := g.N + g.JarCount
+
+	if fromContainer < 0 || fromContainer >= totalContainers ||
+		toContainer < 0 || toContainer >= totalContainers {
+		return false, 0 // Invalid container indices
 	}
 
-	if fromBottle == toBottle {
-		return false, 0 // Cannot pour to same bottle
+	if fromContainer == toContainer {
+		return false, 0 // Cannot pour to same container
 	}
 
-	from := &g.bottles[fromBottle]
-	to := &g.bottles[toBottle]
+	// Get source and target containers
+	var from, to *Bottle
+	var toCapacity int
+
+	if fromContainer < g.N {
+		// Source is a bottle
+		from = &g.bottles[fromContainer]
+	} else {
+		// Source is a jar
+		from = &g.jars[fromContainer-g.N]
+	}
+
+	if toContainer < g.N {
+		// Target is a bottle
+		to = &g.bottles[toContainer]
+		toCapacity = g.M
+	} else {
+		// Target is a jar
+		to = &g.jars[toContainer-g.N]
+		toCapacity = g.JarCapacity
+	}
 
 	if len(*from) == 0 {
 		return false, 0 // Cannot pour from empty bottle
 	}
 
-	if len(*to) >= g.M {
-		return false, 0 // Target bottle is full
+	if len(*to) >= toCapacity {
+		return false, 0 // Target container is full
 	}
 
 	// Get the top color from source bottle
@@ -661,7 +731,7 @@ func (g *WaterBottleGame) Pour(fromBottle, toBottle int) (bool, int) {
 	fromIndex++ // Now fromIndex points to the first occurrence of topColor from top
 
 	availableAmount := len(*from) - fromIndex
-	targetSpace := g.M - len(*to)
+	targetSpace := toCapacity - len(*to)
 	pourAmount := min(availableAmount, targetSpace)
 
 	if pourAmount <= 0 {
@@ -674,14 +744,33 @@ func (g *WaterBottleGame) Pour(fromBottle, toBottle int) (bool, int) {
 	}
 	*from = (*from)[:len(*from)-pourAmount]
 
-	// Update empty bottle count
+	// Update empty container counts
 	wasFromEmpty := len(*from) == pourAmount
 	wasToEmpty := len(*to) == pourAmount
 
-	if wasFromEmpty && !wasToEmpty {
-		g.emptyCount++
-	} else if !wasFromEmpty && wasToEmpty {
-		g.emptyCount--
+	// Update counts based on container types
+	if fromContainer < g.N {
+		// Source is a bottle
+		if wasFromEmpty {
+			g.emptyCount++
+		}
+	} else {
+		// Source is a jar
+		if wasFromEmpty {
+			g.emptyJarCount++
+		}
+	}
+
+	if toContainer < g.N {
+		// Target is a bottle
+		if wasToEmpty {
+			g.emptyCount--
+		}
+	} else {
+		// Target is a jar
+		if wasToEmpty {
+			g.emptyJarCount--
+		}
 	}
 
 	return true, pourAmount
@@ -691,9 +780,10 @@ func (g *WaterBottleGame) Pour(fromBottle, toBottle int) (bool, int) {
 func (g *WaterBottleGame) CheckPossibleMoves() (bool, int, []string) {
 	possibleMoves := 0
 	moveDescriptions := make([]string, 0)
+	totalContainers := g.N + g.JarCount
 
-	for from := 0; from < g.N; from++ {
-		for to := 0; to < g.N; to++ {
+	for from := 0; from < totalContainers; from++ {
+		for to := 0; to < totalContainers; to++ {
 			if from != to {
 				// Save current state
 				originalState := g.copyGameState()
@@ -702,26 +792,42 @@ func (g *WaterBottleGame) CheckPossibleMoves() (bool, int, []string) {
 				if success {
 					possibleMoves++
 					// Create move description
-					fromBottle := originalState[from]
-					toBottle := originalState[to]
+					var fromContainer, toContainer []Color
+					var fromName, toName string
+
+					if from < g.N {
+						fromContainer = originalState.bottles[from]
+						fromName = fmt.Sprintf("%d号瓶", from)
+					} else {
+						fromContainer = originalState.jars[from-g.N]
+						fromName = fmt.Sprintf("%d号罐", from-g.N)
+					}
+
+					if to < g.N {
+						toContainer = originalState.bottles[to]
+						toName = fmt.Sprintf("%d号瓶", to)
+					} else {
+						toContainer = originalState.jars[to-g.N]
+						toName = fmt.Sprintf("%d号罐", to-g.N)
+					}
 
 					var fromDesc, toDesc string
-					if len(fromBottle) == 0 {
-						fromDesc = "空瓶"
+					if len(fromContainer) == 0 {
+						fromDesc = "空"
 					} else {
-						topColor := fromBottle[len(fromBottle)-1]
+						topColor := fromContainer[len(fromContainer)-1]
 						fromDesc = fmt.Sprintf("顶层%s色", getColorName(topColor))
 					}
 
-					if len(toBottle) == 0 {
-						toDesc = "空瓶"
+					if len(toContainer) == 0 {
+						toDesc = "空"
 					} else {
-						topColor := toBottle[len(toBottle)-1]
+						topColor := toContainer[len(toContainer)-1]
 						toDesc = fmt.Sprintf("顶层%s色", getColorName(topColor))
 					}
 
-					moveDesc := fmt.Sprintf("从%d号瓶(%s)倒%d单位到%d号瓶(%s)",
-						from, fromDesc, moved, to, toDesc)
+					moveDesc := fmt.Sprintf("从%s(%s)倒%d单位到%s(%s)",
+						fromName, fromDesc, moved, toName, toDesc)
 					moveDescriptions = append(moveDescriptions, moveDesc)
 				}
 
@@ -767,35 +873,49 @@ func (g *WaterBottleGame) PrintMoveStatus() {
 func (g *WaterBottleGame) analyzeDeadlock() {
 	fmt.Println("📊 死局分析：")
 
-	// Check empty bottles
-	if g.emptyCount == 0 {
-		fmt.Println("  ❌ 没有空瓶子可以倒水")
+	// Check empty containers
+	if g.emptyCount == 0 && g.emptyJarCount == 0 {
+		fmt.Println("  ❌ 没有空容器可以倒水")
 	} else {
-		fmt.Printf("  ✅ 还有 %d 个空瓶子\n", g.emptyCount)
+		if g.emptyCount > 0 {
+			fmt.Printf("  ✅ 还有 %d 个空瓶子\n", g.emptyCount)
+		}
+		if g.emptyJarCount > 0 {
+			fmt.Printf("  ✅ 还有 %d 个空罐子\n", g.emptyJarCount)
+		}
 	}
 
-	// Check top colors
-	topColors := make(map[Color][]int) // color -> bottle indices
+	// Check top colors for all containers
+	topColors := make(map[Color][]string) // color -> container names
 	for i, bottle := range g.bottles {
 		if len(bottle) > 0 {
 			topColor := bottle[len(bottle)-1]
-			topColors[topColor] = append(topColors[topColor], i)
+			containerName := fmt.Sprintf("%d号瓶", i)
+			topColors[topColor] = append(topColors[topColor], containerName)
+		}
+	}
+
+	for i, jar := range g.jars {
+		if len(jar) > 0 {
+			topColor := jar[len(jar)-1]
+			containerName := fmt.Sprintf("%d号罐", i)
+			topColors[topColor] = append(topColors[topColor], containerName)
 		}
 	}
 
 	fmt.Printf("  📈 顶层颜色分布：\n")
 	allDifferent := true
-	for color, bottles := range topColors {
-		if len(bottles) > 1 {
+	for color, containers := range topColors {
+		if len(containers) > 1 {
 			allDifferent = false
-			fmt.Printf("    %s色：瓶子 %v（可以互相倒水）\n", getColorName(color), bottles)
+			fmt.Printf("    %s色：容器 %v（可以互相倒水）\n", getColorName(color), containers)
 		} else {
-			fmt.Printf("    %s色：瓶子 %v（孤立）\n", getColorName(color), bottles)
+			fmt.Printf("    %s色：容器 %v（孤立）\n", getColorName(color), containers)
 		}
 	}
 
-	if allDifferent && g.emptyCount == 0 {
-		fmt.Println("  🚨 死局原因：所有瓶子顶层颜色都不同，且没有空瓶")
+	if allDifferent && g.emptyCount == 0 && g.emptyJarCount == 0 {
+		fmt.Println("  🚨 死局原因：所有容器顶层颜色都不同，且没有空容器")
 	}
 }
 
@@ -838,7 +958,8 @@ func (g *WaterBottleGame) GetState() [][]Color {
 func (g *WaterBottleGame) PrintState() {
 	colorEmojis := []string{"🔴", "🔵", "🟢", "🟡", "🟠", "🟣", "🟤", "⚫", "⚪", "🔸"}
 
-	fmt.Printf("\n🎮 当前游戏状态 (总瓶数:%d, 容量:%d, 空瓶:%d, 颜色数:%d):\n", g.N, g.M, g.J, g.K)
+	fmt.Printf("\n🎮 当前游戏状态 (瓶数:%d, 瓶容量:%d, 空瓶:%d, 罐数:%d, 罐容量:%d, 颜色数:%d):\n",
+		g.N, g.M, g.J, g.JarCount, g.JarCapacity, g.K)
 
 	// Adjust separator length based on bottle count
 	separatorLength := min(80, max(50, g.N*8))
@@ -884,8 +1005,53 @@ func (g *WaterBottleGame) PrintState() {
 		fmt.Println()
 	}
 
+	// Display jars if any
+	if g.JarCount > 0 {
+		fmt.Println()
+		fmt.Println("🏺 罐子状态:")
+		for i, jar := range g.jars {
+			fmt.Printf("%d号罐: ", i)
+			if len(jar) == 0 {
+				fmt.Print("[空罐子]")
+			} else {
+				fmt.Print("[")
+				for j, color := range jar {
+					if j > 0 {
+						fmt.Print(" ")
+					}
+					if int(color) < len(colorEmojis) {
+						fmt.Printf("%s", colorEmojis[color])
+					} else {
+						fmt.Printf("%d", color)
+					}
+				}
+				fmt.Print("]")
+			}
+
+			// 显示容量条
+			filled := len(jar)
+			empty := g.JarCapacity - filled
+
+			// 防止负数导致panic
+			if empty < 0 {
+				empty = 0
+				fmt.Printf(" ⚠️OVERFLOW⚠️ ")
+			}
+
+			fmt.Printf(" %s", strings.Repeat("█", min(filled, g.JarCapacity)))
+			fmt.Printf("%s", strings.Repeat("░", empty))
+			fmt.Printf(" (%d/%d)", filled, g.JarCapacity)
+
+			fmt.Println()
+		}
+	}
+
 	fmt.Println(strings.Repeat("━", separatorLength))
-	fmt.Printf("📊 空瓶子数量: %d\n", g.emptyCount)
+	fmt.Printf("📊 空瓶子数量: %d", g.emptyCount)
+	if g.JarCount > 0 {
+		fmt.Printf(", 空罐子数量: %d", g.emptyJarCount)
+	}
+	fmt.Println()
 	if g.IsWon() {
 		fmt.Println("🎉 游戏胜利！所有瓶子都完成了！🎉")
 	} else {
@@ -909,18 +1075,32 @@ func (g *WaterBottleGame) isSingleColor(bottle Bottle) bool {
 }
 
 // statesEqual compares two game states for equality
-func (g *WaterBottleGame) statesEqual(state1, state2 [][]Color) bool {
-	if len(state1) != len(state2) {
+func (g *WaterBottleGame) statesEqual(state1, state2 *GameState) bool {
+	if len(state1.bottles) != len(state2.bottles) || len(state1.jars) != len(state2.jars) {
 		return false
 	}
 
-	for i := range state1 {
-		if len(state1[i]) != len(state2[i]) {
+	// Compare bottles
+	for i := range state1.bottles {
+		if len(state1.bottles[i]) != len(state2.bottles[i]) {
 			return false
 		}
 
-		for j := range state1[i] {
-			if state1[i][j] != state2[i][j] {
+		for j := range state1.bottles[i] {
+			if state1.bottles[i][j] != state2.bottles[i][j] {
+				return false
+			}
+		}
+	}
+
+	// Compare jars
+	for i := range state1.jars {
+		if len(state1.jars[i]) != len(state2.jars[i]) {
+			return false
+		}
+
+		for j := range state1.jars[i] {
+			if state1.jars[i][j] != state2.jars[i][j] {
 				return false
 			}
 		}

@@ -102,6 +102,37 @@ func runWaterBottleDemo() {
 		break
 	}
 
+	// Get jar parameters
+	var JarCount, JarCapacity int
+
+	for {
+		fmt.Print("🏺 请输入罐子数量 (0表示不使用罐子, 建议 0-3): ")
+		if !scanner.Scan() {
+			return
+		}
+		JarCount, err = strconv.Atoi(strings.TrimSpace(scanner.Text()))
+		if err != nil || JarCount < 0 || JarCount > 10 {
+			fmt.Println("❌ 请输入 0-10 之间的数字")
+			continue
+		}
+		break
+	}
+
+	if JarCount > 0 {
+		for {
+			fmt.Print("📏 请输入每个罐子的容量 (1-4): ")
+			if !scanner.Scan() {
+				return
+			}
+			JarCapacity, err = strconv.Atoi(strings.TrimSpace(scanner.Text()))
+			if err != nil || JarCapacity < 1 || JarCapacity > 4 {
+				fmt.Println("❌ 请输入 1-4 之间的数字")
+				continue
+			}
+			break
+		}
+	}
+
 	// Choose generation method
 	var generationMethod string
 	for {
@@ -149,16 +180,16 @@ func runWaterBottleDemo() {
 
 	fmt.Println()
 	if generationMethod == "reverse" {
-		fmt.Printf("✅ 游戏参数设置完成：%d个瓶子，每个容量%d，%d个空瓶，%d种颜色\n", N, M, J, K)
+		fmt.Printf("✅ 游戏参数设置完成：%d个瓶子，每个容量%d，%d个空瓶，%d个罐子，每个容量%d，%d种颜色\n", N, M, J, JarCount, JarCapacity, K)
 		fmt.Printf("🔄 使用逆向生成，%d步逆序\n", reverseSteps)
 	} else {
-		fmt.Printf("✅ 游戏参数设置完成：%d个瓶子，每个容量%d，%d个空瓶，%d种颜色\n", N, M, J, K)
+		fmt.Printf("✅ 游戏参数设置完成：%d个瓶子，每个容量%d，%d个空瓶，%d个罐子，每个容量%d，%d种颜色\n", N, M, J, JarCount, JarCapacity, K)
 		fmt.Println("🎲 使用纯随机生成")
 	}
 	fmt.Println("正在生成游戏初始状态...")
 
 	// Create game with user parameters
-	game1, err := NewWaterBottleGame(N, M, J, K)
+	game1, err := NewWaterBottleGame(N, M, J, K, JarCount, JarCapacity)
 	if err != nil {
 		fmt.Printf("❌ 创建游戏失败: %v\n", err)
 		return
@@ -188,16 +219,24 @@ func runWaterBottleDemo() {
 	fmt.Println("\n=== 🎮 开始游戏！===")
 	fmt.Println("游戏目标：通过倒水让每个瓶子都装满单一颜色的水")
 	fmt.Println("数字代表颜色：0=红色 🔴, 1=蓝色 🔵, 2=绿色 🟢, 3=黄色 🟡")
+	if JarCount > 0 {
+		fmt.Printf("🏺 罐子说明：有%d个罐子可以辅助倒水，罐子不需要完成（不是游戏目标）\n", JarCount)
+	}
 	fmt.Println()
 	fmt.Println("📋 可用命令：")
-	fmt.Println("  倒水 <源瓶子> <目标瓶子>     - 例如：倒水 0 3 （从0号瓶倒到3号瓶）")
+	if JarCount > 0 {
+		fmt.Printf("  倒水 <源容器> <目标容器>     - 例如：倒水 0 3 （0-%d是瓶子，%d-%d是罐子）\n",
+			N-1, N, N+JarCount-1)
+	} else {
+		fmt.Println("  倒水 <源瓶子> <目标瓶子>     - 例如：倒水 0 3 （从0号瓶倒到3号瓶）")
+	}
 	fmt.Println("  状态                       - 查看当前游戏状态和可能移动")
 	fmt.Println("  检查                       - 单独检查可能的移动")
 	fmt.Println("  新游戏 <瓶数> <容量> <空瓶数> <颜色数> [生成方式] - 创建新游戏")
 	fmt.Println("    生成方式: random(随机) 或 reverse(逆向，默认)")
 	fmt.Println("  退出                       - 结束游戏")
 	fmt.Println()
-	fmt.Println("💡 提示：只能倒到空瓶或者顶层颜色相同的瓶子里")
+	fmt.Println("💡 提示：只能倒到空容器或者顶层颜色相同的容器里")
 	fmt.Println()
 
 	currentGame := game1
@@ -295,7 +334,7 @@ func runWaterBottleDemo() {
 				}
 			}
 
-			newGame, err := NewWaterBottleGame(N, M, J, K)
+			newGame, err := NewWaterBottleGame(N, M, J, K, 0, 0) // No jars by default for quick new game
 			if err != nil {
 				fmt.Printf("❌ 创建游戏失败: %v\n", err)
 				continue
@@ -342,7 +381,7 @@ func runWaterBottleDemo() {
 func demonstrateBasicSolver() {
 	fmt.Println("\n=== Basic Solver Demonstration ===")
 
-	game, err := NewWaterBottleGame(4, 3, 1, 2)
+	game, err := NewWaterBottleGame(4, 3, 1, 2, 0, 0) // No jars for demo
 	if err != nil {
 		fmt.Printf("Error creating game: %v\n", err)
 		return
