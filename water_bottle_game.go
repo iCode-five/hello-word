@@ -1060,6 +1060,131 @@ func (g *WaterBottleGame) PrintState() {
 	fmt.Println()
 }
 
+// AddEmptyBottle adds a new empty bottle to the game
+func (g *WaterBottleGame) AddEmptyBottle() bool {
+	// Check if we can add more bottles (reasonable limit)
+	maxBottles := 30 // Reasonable maximum to prevent abuse
+	if g.N >= maxBottles {
+		return false
+	}
+
+	// Create a new empty bottle
+	newBottle := make(Bottle, 0, g.M)
+	g.bottles = append(g.bottles, newBottle)
+
+	// Update counters
+	g.N++
+	g.emptyCount++
+
+	return true
+}
+
+// CanAddEmptyBottle checks if we can add more empty bottles
+func (g *WaterBottleGame) CanAddEmptyBottle() bool {
+	maxBottles := 30
+	return g.N < maxBottles
+}
+
+// GetBottleLimit returns the current bottle limit
+func (g *WaterBottleGame) GetBottleLimit() int {
+	return 30
+}
+
+// ShuffleWater randomly redistributes water while preserving completed bottles and clearing jars
+func (g *WaterBottleGame) ShuffleWater() {
+	// Collect water from non-completed bottles
+	var waterPool []Color
+	completedBottles := make([]bool, g.N)
+
+	fmt.Println("🔀 开始随机打乱...")
+	fmt.Println("   📋 分析瓶子状态...")
+
+	// Identify completed bottles and collect water from others
+	completedCount := 0
+	for i, bottle := range g.bottles {
+		if len(bottle) == g.M && g.isSingleColor(bottle) {
+			// This bottle is completed, don't touch it
+			completedBottles[i] = true
+			completedCount++
+			fmt.Printf("   ✅ %d号瓶已完成，保持不变\n", i)
+		} else {
+			// Collect water from this bottle
+			completedBottles[i] = false
+			for _, color := range bottle {
+				waterPool = append(waterPool, color)
+			}
+			// Clear this bottle
+			g.bottles[i] = make(Bottle, 0, g.M)
+		}
+	}
+
+	fmt.Printf("   💧 收集到 %d 单位水需要重新分配\n", len(waterPool))
+	fmt.Printf("   🎯 %d 个瓶子已完成，%d 个瓶子需要重新分配\n", completedCount, g.N-completedCount)
+
+	// Clear all jars
+	if g.JarCount > 0 {
+		fmt.Printf("   🏺 清空 %d 个罐子\n", g.JarCount)
+		for i := range g.jars {
+			g.jars[i] = make(Bottle, 0, g.JarCapacity)
+		}
+		g.emptyJarCount = g.JarCount
+	}
+
+	// Shuffle the water pool
+	if len(waterPool) > 0 {
+		fmt.Println("   🎲 随机打乱水的分配...")
+		g.shuffleColorPool(waterPool)
+
+		// Redistribute water to non-completed bottles
+		waterIndex := 0
+		availableBottles := make([]int, 0)
+
+		// Get list of non-completed bottles
+		for i := 0; i < g.N; i++ {
+			if !completedBottles[i] {
+				availableBottles = append(availableBottles, i)
+			}
+		}
+
+		// Distribute water randomly among available bottles
+		for waterIndex < len(waterPool) && len(availableBottles) > 0 {
+			// Pick a random bottle from available ones
+			bottleIdx := availableBottles[rand.Intn(len(availableBottles))]
+
+			// Add water to this bottle if it's not full
+			if len(g.bottles[bottleIdx]) < g.M {
+				g.bottles[bottleIdx] = append(g.bottles[bottleIdx], waterPool[waterIndex])
+				waterIndex++
+			}
+
+			// If bottle is now full, remove it from available list
+			if len(g.bottles[bottleIdx]) >= g.M {
+				for j, idx := range availableBottles {
+					if idx == bottleIdx {
+						availableBottles = append(availableBottles[:j], availableBottles[j+1:]...)
+						break
+					}
+				}
+			}
+		}
+
+		// If there's still water left (shouldn't happen with proper game state)
+		if waterIndex < len(waterPool) {
+			fmt.Printf("   ⚠️  警告：还有 %d 单位水无法分配\n", len(waterPool)-waterIndex)
+		}
+	}
+
+	// Recalculate empty bottle count
+	g.emptyCount = 0
+	for _, bottle := range g.bottles {
+		if len(bottle) == 0 {
+			g.emptyCount++
+		}
+	}
+
+	fmt.Printf("   ✅ 打乱完成！空瓶数量：%d\n", g.emptyCount)
+}
+
 // Helper function to check if a bottle contains only one color
 func (g *WaterBottleGame) isSingleColor(bottle Bottle) bool {
 	if len(bottle) == 0 {

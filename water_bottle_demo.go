@@ -232,6 +232,8 @@ func runWaterBottleDemo() {
 	}
 	fmt.Println("  状态                       - 查看当前游戏状态和可能移动")
 	fmt.Println("  检查                       - 单独检查可能的移动")
+	fmt.Println("  增加                       - 增加一个空瓶子")
+	fmt.Println("  打乱                       - 随机重新分配水（保持已完成瓶子）")
 	fmt.Println("  新游戏 <瓶数> <容量> <空瓶数> <颜色数> [生成方式] - 创建新游戏")
 	fmt.Println("    生成方式: random(随机) 或 reverse(逆向，默认)")
 	fmt.Println("  退出                       - 结束游戏")
@@ -269,6 +271,41 @@ func runWaterBottleDemo() {
 
 		case "check", "c", "检查", "移动":
 			currentGame.PrintMoveStatus()
+
+		case "add", "a", "增加", "空瓶", "加瓶":
+			if currentGame.CanAddEmptyBottle() {
+				success := currentGame.AddEmptyBottle()
+				if success {
+					fmt.Printf("✅ 成功增加了一个空瓶！现在有 %d 个瓶子\n", currentGame.N)
+					currentGame.PrintState()
+					if !currentGame.IsWon() {
+						currentGame.PrintMoveStatus()
+					}
+				} else {
+					fmt.Println("❌ 增加空瓶失败")
+				}
+			} else {
+				fmt.Printf("❌ 无法增加更多空瓶！瓶子数量已达到上限 %d 个\n", currentGame.GetBottleLimit())
+			}
+
+		case "shuffle", "打乱", "重排", "洗牌":
+			fmt.Println("🔀 即将随机重新打乱水的分配...")
+			fmt.Println("⚠️  注意：已完成的瓶子将保持不变，罐子将被清空")
+			fmt.Print("确定要继续吗？(y/n): ")
+
+			var confirm string
+			fmt.Scanln(&confirm)
+
+			if strings.ToLower(confirm) == "y" || strings.ToLower(confirm) == "yes" {
+				currentGame.ShuffleWater()
+				fmt.Println("\n🎯 打乱完成！新的游戏状态：")
+				currentGame.PrintState()
+				if !currentGame.IsWon() {
+					currentGame.PrintMoveStatus()
+				}
+			} else {
+				fmt.Println("❌ 操作已取消")
+			}
 
 		case "pour", "p", "倒水":
 			if len(parts) != 3 {
@@ -361,9 +398,16 @@ func runWaterBottleDemo() {
 
 		case "help", "h", "帮助":
 			fmt.Println("📋 可用命令：")
-			fmt.Println("  倒水 <源瓶子> <目标瓶子>     - 例如：倒水 0 3")
+			if currentGame.JarCount > 0 {
+				fmt.Printf("  倒水 <源容器> <目标容器>     - 例如：倒水 0 3 （0-%d是瓶子，%d-%d是罐子）\n",
+					currentGame.N-1, currentGame.N, currentGame.N+currentGame.JarCount-1)
+			} else {
+				fmt.Println("  倒水 <源瓶子> <目标瓶子>     - 例如：倒水 0 3")
+			}
 			fmt.Println("  状态                       - 查看当前游戏状态和可能移动")
 			fmt.Println("  检查                       - 单独检查可能的移动")
+			fmt.Println("  增加                       - 增加一个空瓶子")
+			fmt.Println("  打乱                       - 随机重新分配水（保持已完成瓶子）")
 			fmt.Println("  新游戏 <瓶数> <容量> <空瓶数> <颜色数> [生成方式] - 创建新游戏")
 			fmt.Println("    生成方式: random(随机) 或 reverse(逆向，默认)")
 			fmt.Println("    例如：新游戏 5 4 2 3 random")
