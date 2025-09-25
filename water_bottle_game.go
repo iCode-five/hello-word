@@ -73,6 +73,161 @@ func (g *WaterBottleGame) generateInitialState() error {
 	return g.generateInitialStateWithSteps(difficulty)
 }
 
+// generateRandomState creates a completely random initial state (may not be solvable)
+func (g *WaterBottleGame) generateRandomState() error {
+	rand.Seed(time.Now().UnixNano())
+
+	// Check if parameters are reasonable
+	totalWater := (g.N - g.J) * g.M
+	maxPossibleColors := totalWater / g.M
+	if g.K > maxPossibleColors {
+		return fmt.Errorf("参数不合理：总水量%d，每种颜色至少需要%d单位，最多只能有%d种颜色，但要求%d种",
+			totalWater, g.M, maxPossibleColors, g.K)
+	}
+
+	fmt.Println("🎲 正在进行纯随机生成...")
+
+	// Create a pool of all water units with correct color distribution
+	waterPool := g.createColorPool()
+
+	// Shuffle the water pool randomly
+	g.shuffleColorPool(waterPool)
+
+	// Distribute water randomly into bottles
+	return g.distributeWaterRandomly(waterPool)
+}
+
+// createColorPool creates a pool of water units with balanced color distribution
+func (g *WaterBottleGame) createColorPool() []Color {
+	totalWater := (g.N - g.J) * g.M
+
+	// Calculate how many units each color should have
+	baseUnitsPerColor := totalWater / g.K
+	extraUnits := totalWater % g.K
+
+	waterPool := make([]Color, 0, totalWater)
+
+	for colorID := 0; colorID < g.K; colorID++ {
+		unitsForThisColor := baseUnitsPerColor
+		if colorID < extraUnits {
+			unitsForThisColor++
+		}
+
+		// Add this color to the pool
+		for i := 0; i < unitsForThisColor; i++ {
+			waterPool = append(waterPool, Color(colorID))
+		}
+	}
+
+	fmt.Printf("   💧 创建水池：总共%d单位水，%d种颜色\n", len(waterPool), g.K)
+
+	// Print color distribution
+	colorCounts := make(map[Color]int)
+	for _, color := range waterPool {
+		colorCounts[color]++
+	}
+
+	fmt.Print("   🎨 颜色分布：")
+	for colorID := 0; colorID < g.K; colorID++ {
+		fmt.Printf("%s×%d ", getColorName(Color(colorID)), colorCounts[Color(colorID)])
+	}
+	fmt.Println()
+
+	return waterPool
+}
+
+// shuffleColorPool randomly shuffles the water pool using Fisher-Yates algorithm
+func (g *WaterBottleGame) shuffleColorPool(pool []Color) {
+	fmt.Println("   🔀 随机打乱水池...")
+
+	for i := len(pool) - 1; i > 0; i-- {
+		j := rand.Intn(i + 1)
+		pool[i], pool[j] = pool[j], pool[i]
+	}
+}
+
+// distributeWaterRandomly distributes shuffled water into bottles randomly
+func (g *WaterBottleGame) distributeWaterRandomly(waterPool []Color) error {
+	fmt.Println("   🍶 随机分配水到瓶子...")
+
+	// Clear all bottles first
+	for i := range g.bottles {
+		g.bottles[i] = make(Bottle, 0, g.M)
+	}
+	g.emptyCount = g.J
+
+	// Randomly choose which bottles to fill (leaving J empty)
+	bottlesToFill := make([]int, 0, g.N-g.J)
+	for i := 0; i < g.N-g.J; i++ {
+		bottlesToFill = append(bottlesToFill, i)
+	}
+
+	// Shuffle bottle order
+	for i := len(bottlesToFill) - 1; i > 0; i-- {
+		j := rand.Intn(i + 1)
+		bottlesToFill[i], bottlesToFill[j] = bottlesToFill[j], bottlesToFill[i]
+	}
+
+	waterIndex := 0
+
+	// Fill bottles completely randomly
+	for _, bottleIdx := range bottlesToFill {
+		// Fill this bottle to capacity
+		for unit := 0; unit < g.M && waterIndex < len(waterPool); unit++ {
+			g.bottles[bottleIdx] = append(g.bottles[bottleIdx], waterPool[waterIndex])
+			waterIndex++
+		}
+	}
+
+	// Verify we used all water
+	if waterIndex != len(waterPool) {
+		return fmt.Errorf("水分配错误：应该分配%d单位，实际分配%d单位", len(waterPool), waterIndex)
+	}
+
+	fmt.Printf("   ✅ 随机分配完成！填充了%d个瓶子，保留%d个空瓶\n", g.N-g.J, g.J)
+
+	// Analyze the generated state
+	g.analyzeRandomState()
+
+	return nil
+}
+
+// analyzeRandomState analyzes the randomly generated state
+func (g *WaterBottleGame) analyzeRandomState() {
+	fmt.Println("   📊 随机状态分析：")
+
+	mixedBottles := 0
+	singleColorBottles := 0
+
+	for i, bottle := range g.bottles {
+		if len(bottle) == 0 {
+			continue
+		}
+
+		if g.isSingleColor(bottle) {
+			singleColorBottles++
+			if len(bottle) == g.M {
+				fmt.Printf("      瓶子%d：✅ 已完成（单色满瓶）\n", i)
+			} else {
+				fmt.Printf("      瓶子%d：🟡 单色但未满\n", i)
+			}
+		} else {
+			mixedBottles++
+			fmt.Printf("      瓶子%d：🔴 混色瓶\n", i)
+		}
+	}
+
+	fmt.Printf("   📈 统计：%d个混色瓶，%d个单色瓶\n", mixedBottles, singleColorBottles)
+
+	if g.IsWon() {
+		fmt.Println("   🎉 幸运！随机生成了一个已完成的状态！")
+	} else if mixedBottles == 0 {
+		fmt.Println("   🟡 生成了全单色状态，但可能有未满的瓶子")
+	} else {
+		fmt.Println("   🎯 生成了混合状态，需要玩家解决")
+	}
+}
+
 // generateInitialStateWithSteps creates initial state with specified reverse steps
 func (g *WaterBottleGame) generateInitialStateWithSteps(reverseSteps int) error {
 	rand.Seed(time.Now().UnixNano())
@@ -246,8 +401,8 @@ func (g *WaterBottleGame) tryReverseOperationWithRecord() bool {
 		return false // No water to pour
 	}
 
-	// Try multiple random combinations
-	maxAttempts := 20
+	// Try multiple random combinations (scale with bottle count)
+	maxAttempts := min(50, g.N*5)
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		// Pick random source
 		sourceIdx := sources[rand.Intn(len(sources))]
@@ -532,6 +687,118 @@ func (g *WaterBottleGame) Pour(fromBottle, toBottle int) (bool, int) {
 	return true, pourAmount
 }
 
+// CheckPossibleMoves checks if there are any possible moves and returns detailed information
+func (g *WaterBottleGame) CheckPossibleMoves() (bool, int, []string) {
+	possibleMoves := 0
+	moveDescriptions := make([]string, 0)
+
+	for from := 0; from < g.N; from++ {
+		for to := 0; to < g.N; to++ {
+			if from != to {
+				// Save current state
+				originalState := g.copyGameState()
+
+				success, moved := g.Pour(from, to)
+				if success {
+					possibleMoves++
+					// Create move description
+					fromBottle := originalState[from]
+					toBottle := originalState[to]
+
+					var fromDesc, toDesc string
+					if len(fromBottle) == 0 {
+						fromDesc = "空瓶"
+					} else {
+						topColor := fromBottle[len(fromBottle)-1]
+						fromDesc = fmt.Sprintf("顶层%s色", getColorName(topColor))
+					}
+
+					if len(toBottle) == 0 {
+						toDesc = "空瓶"
+					} else {
+						topColor := toBottle[len(toBottle)-1]
+						toDesc = fmt.Sprintf("顶层%s色", getColorName(topColor))
+					}
+
+					moveDesc := fmt.Sprintf("从%d号瓶(%s)倒%d单位到%d号瓶(%s)",
+						from, fromDesc, moved, to, toDesc)
+					moveDescriptions = append(moveDescriptions, moveDesc)
+				}
+
+				// Restore state
+				g.restoreGameState(originalState)
+			}
+		}
+	}
+
+	return possibleMoves > 0, possibleMoves, moveDescriptions
+}
+
+// PrintMoveStatus prints the current move status
+func (g *WaterBottleGame) PrintMoveStatus() {
+	hasMoves, moveCount, moveDescriptions := g.CheckPossibleMoves()
+
+	fmt.Printf("\n🔍 移动状态检查：\n")
+	if !hasMoves {
+		fmt.Println("🚨 没有可用的移动！")
+		if g.IsWon() {
+			fmt.Println("🎉 游戏已完成！")
+		} else {
+			fmt.Println("💀 游戏陷入死局！")
+			g.analyzeDeadlock()
+		}
+	} else {
+		fmt.Printf("✅ 共有 %d 种可能的移动：\n", moveCount)
+
+		// Show first few moves as examples
+		maxShow := min(5, len(moveDescriptions))
+		for i := 0; i < maxShow; i++ {
+			fmt.Printf("  • %s\n", moveDescriptions[i])
+		}
+
+		if len(moveDescriptions) > maxShow {
+			fmt.Printf("  • ... 还有 %d 种其他移动\n", len(moveDescriptions)-maxShow)
+		}
+	}
+	fmt.Println()
+}
+
+// analyzeDeadlock analyzes why the game is in deadlock
+func (g *WaterBottleGame) analyzeDeadlock() {
+	fmt.Println("📊 死局分析：")
+
+	// Check empty bottles
+	if g.emptyCount == 0 {
+		fmt.Println("  ❌ 没有空瓶子可以倒水")
+	} else {
+		fmt.Printf("  ✅ 还有 %d 个空瓶子\n", g.emptyCount)
+	}
+
+	// Check top colors
+	topColors := make(map[Color][]int) // color -> bottle indices
+	for i, bottle := range g.bottles {
+		if len(bottle) > 0 {
+			topColor := bottle[len(bottle)-1]
+			topColors[topColor] = append(topColors[topColor], i)
+		}
+	}
+
+	fmt.Printf("  📈 顶层颜色分布：\n")
+	allDifferent := true
+	for color, bottles := range topColors {
+		if len(bottles) > 1 {
+			allDifferent = false
+			fmt.Printf("    %s色：瓶子 %v（可以互相倒水）\n", getColorName(color), bottles)
+		} else {
+			fmt.Printf("    %s色：瓶子 %v（孤立）\n", getColorName(color), bottles)
+		}
+	}
+
+	if allDifferent && g.emptyCount == 0 {
+		fmt.Println("  🚨 死局原因：所有瓶子顶层颜色都不同，且没有空瓶")
+	}
+}
+
 // IsWon checks if the game is won
 func (g *WaterBottleGame) IsWon() bool {
 	nonEmptyBottles := 0
@@ -572,7 +839,10 @@ func (g *WaterBottleGame) PrintState() {
 	colorEmojis := []string{"🔴", "🔵", "🟢", "🟡", "🟠", "🟣", "🟤", "⚫", "⚪", "🔸"}
 
 	fmt.Printf("\n🎮 当前游戏状态 (总瓶数:%d, 容量:%d, 空瓶:%d, 颜色数:%d):\n", g.N, g.M, g.J, g.K)
-	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
+	// Adjust separator length based on bottle count
+	separatorLength := min(80, max(50, g.N*8))
+	fmt.Println(strings.Repeat("━", separatorLength))
 
 	for i, bottle := range g.bottles {
 		fmt.Printf("%d号瓶: ", i)
@@ -614,7 +884,7 @@ func (g *WaterBottleGame) PrintState() {
 		fmt.Println()
 	}
 
-	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	fmt.Println(strings.Repeat("━", separatorLength))
 	fmt.Printf("📊 空瓶子数量: %d\n", g.emptyCount)
 	if g.IsWon() {
 		fmt.Println("🎉 游戏胜利！所有瓶子都完成了！🎉")
