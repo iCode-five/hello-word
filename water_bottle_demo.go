@@ -133,26 +133,51 @@ func runWaterBottleDemo() {
 		}
 	}
 
-	// Choose generation method
-	var generationMethod string
+	// Get bag system option
+	var UseBags bool
 	for {
-		fmt.Println("🎲 请选择初始状态生成方式：")
-		fmt.Println("  1. 逆向生成（保证有解，推荐）")
-		fmt.Println("  2. 纯随机生成（可能无解，更有挑战性）")
-		fmt.Print("请输入选择 (1/2): ")
+		fmt.Print("🎒 是否使用袋子系统？(y/n, 袋子会自动收集完成的瓶子): ")
 		if !scanner.Scan() {
 			return
 		}
-		choice := strings.TrimSpace(scanner.Text())
-		if choice == "1" {
-			generationMethod = "reverse"
+		bagChoice := strings.ToLower(strings.TrimSpace(scanner.Text()))
+		if bagChoice == "y" || bagChoice == "yes" {
+			UseBags = true
 			break
-		} else if choice == "2" {
-			generationMethod = "random"
+		} else if bagChoice == "n" || bagChoice == "no" {
+			UseBags = false
 			break
 		} else {
-			fmt.Println("❌ 请输入 1 或 2")
+			fmt.Println("❌ 请输入 y 或 n")
 			continue
+		}
+	}
+
+	// Choose generation method (bags force random generation)
+	var generationMethod string
+	if UseBags {
+		generationMethod = "random"
+		fmt.Println("🎒 使用袋子系统时将自动使用随机生成")
+	} else {
+		for {
+			fmt.Println("🎲 请选择初始状态生成方式：")
+			fmt.Println("  1. 逆向生成（保证有解，推荐）")
+			fmt.Println("  2. 纯随机生成（可能无解，更有挑战性）")
+			fmt.Print("请输入选择 (1/2): ")
+			if !scanner.Scan() {
+				return
+			}
+			choice := strings.TrimSpace(scanner.Text())
+			if choice == "1" {
+				generationMethod = "reverse"
+				break
+			} else if choice == "2" {
+				generationMethod = "random"
+				break
+			} else {
+				fmt.Println("❌ 请输入 1 或 2")
+				continue
+			}
 		}
 	}
 
@@ -189,7 +214,7 @@ func runWaterBottleDemo() {
 	fmt.Println("正在生成游戏初始状态...")
 
 	// Create game with user parameters
-	game1, err := NewWaterBottleGame(N, M, J, K, JarCount, JarCapacity)
+	game1, err := NewWaterBottleGame(N, M, J, K, JarCount, JarCapacity, UseBags)
 	if err != nil {
 		fmt.Printf("❌ 创建游戏失败: %v\n", err)
 		return
@@ -330,13 +355,18 @@ func runWaterBottleDemo() {
 				if currentGame.IsWon() {
 					fmt.Println("🎉🎉🎉 恭喜！你赢了！所有瓶子都是单色满瓶！🎉🎉🎉")
 				} else {
+					// Reset operation state before checking moves
+					currentGame.ResetOperationState()
 					// Check for possible moves after each successful move
 					currentGame.PrintMoveStatus()
 				}
 			} else {
-				fmt.Printf("❌ 无法从 %d 号瓶倒水到 %d 号瓶\n", from, to)
-				fmt.Println("💡 检查：源瓶是否有水？目标瓶是否满了？顶层颜色是否匹配？")
+				fmt.Printf("❌ 无法从 %d 号容器倒水到 %d 号容器\n", from, to)
+				reason := currentGame.GetPourFailureReason(from, to)
+				fmt.Printf("💡 原因：%s\n", reason)
 			}
+			// Ensure operation state is reset after any pour attempt
+			currentGame.ResetOperationState()
 
 		case "new", "n", "新游戏":
 			if len(parts) < 5 || len(parts) > 6 {
@@ -371,7 +401,7 @@ func runWaterBottleDemo() {
 				}
 			}
 
-			newGame, err := NewWaterBottleGame(N, M, J, K, 0, 0) // No jars by default for quick new game
+			newGame, err := NewWaterBottleGame(N, M, J, K, 0, 0, false) // No jars or bags by default for quick new game
 			if err != nil {
 				fmt.Printf("❌ 创建游戏失败: %v\n", err)
 				continue
@@ -425,7 +455,7 @@ func runWaterBottleDemo() {
 func demonstrateBasicSolver() {
 	fmt.Println("\n=== Basic Solver Demonstration ===")
 
-	game, err := NewWaterBottleGame(4, 3, 1, 2, 0, 0) // No jars for demo
+	game, err := NewWaterBottleGame(4, 3, 1, 2, 0, 0, false) // No jars or bags for demo
 	if err != nil {
 		fmt.Printf("Error creating game: %v\n", err)
 		return

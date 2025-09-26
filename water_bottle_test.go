@@ -7,7 +7,7 @@ import (
 
 func TestWaterBottleGameCreation(t *testing.T) {
 	// Test valid game creation
-	game, err := NewWaterBottleGame(5, 4, 2, 3)
+	game, err := NewWaterBottleGame(5, 4, 2, 3, 0, 0, false)
 	if err != nil {
 		t.Fatalf("Expected no error, got: %v", err)
 	}
@@ -17,24 +17,24 @@ func TestWaterBottleGameCreation(t *testing.T) {
 	}
 
 	// Test invalid parameters
-	_, err = NewWaterBottleGame(2, 4, 2, 3) // N <= J
+	_, err = NewWaterBottleGame(2, 4, 2, 3, 0, 0, false) // N <= J
 	if err == nil {
 		t.Error("Expected error for N <= J")
 	}
 
-	_, err = NewWaterBottleGame(5, 0, 2, 3) // M <= 0
+	_, err = NewWaterBottleGame(5, 0, 2, 3, 0, 0, false) // M <= 0
 	if err == nil {
 		t.Error("Expected error for M <= 0")
 	}
 
-	_, err = NewWaterBottleGame(5, 4, 2, 0) // K <= 0
+	_, err = NewWaterBottleGame(5, 4, 2, 0, 0, 0, false) // K <= 0
 	if err == nil {
 		t.Error("Expected error for K <= 0")
 	}
 }
 
 func TestPourLogic(t *testing.T) {
-	game, _ := NewWaterBottleGame(4, 3, 1, 2)
+	game, _ := NewWaterBottleGame(4, 3, 1, 2, 0, 0, false)
 
 	// Manually set up a simple test state
 	game.bottles[0] = Bottle{Color(0), Color(0), Color(1)} // Red, Red, Blue
@@ -71,7 +71,7 @@ func TestPourLogic(t *testing.T) {
 }
 
 func TestGameStateGeneration(t *testing.T) {
-	game, err := NewWaterBottleGame(4, 3, 1, 2)
+	game, err := NewWaterBottleGame(4, 3, 1, 2, 0, 0, false)
 	if err != nil {
 		t.Fatalf("Failed to create game: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestGameStateGeneration(t *testing.T) {
 }
 
 func TestWinCondition(t *testing.T) {
-	game, _ := NewWaterBottleGame(3, 2, 1, 2)
+	game, _ := NewWaterBottleGame(3, 2, 1, 2, 0, 0, false)
 
 	// Set up a winning state
 	game.bottles[0] = Bottle{Color(0), Color(0)} // Full bottle of color 0
@@ -138,7 +138,7 @@ func TestWinCondition(t *testing.T) {
 // Benchmark the initial state generation
 func BenchmarkGenerateInitialState(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		game, _ := NewWaterBottleGame(6, 4, 2, 3)
+		game, _ := NewWaterBottleGame(6, 4, 2, 3, 0, 0, false)
 		game.generateInitialState()
 	}
 }
@@ -146,7 +146,7 @@ func BenchmarkGenerateInitialState(b *testing.B) {
 // Example test that demonstrates usage
 func ExampleWaterBottleGame() {
 	// Create a small game
-	game, _ := NewWaterBottleGame(4, 3, 1, 2)
+	game, _ := NewWaterBottleGame(4, 3, 1, 2, 0, 0, false)
 
 	fmt.Printf("Created game with %d bottles, capacity %d each\n", game.N, game.M)
 	fmt.Printf("Empty bottles: %d, Colors: %d\n", game.J, game.K)

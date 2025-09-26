@@ -10,6 +10,14 @@ import (
 // Color represents a water color (0-based)
 type Color int
 
+// OperationType defines the type of operation being performed
+type OperationType int
+
+const (
+	UserOperation     OperationType = 0 // User-initiated operations
+	InternalOperation OperationType = 1 // Internal program operations
+)
+
 // Bottle represents a water bottle with layers of colored water
 type Bottle []Color
 
@@ -23,21 +31,25 @@ type Move struct {
 
 // WaterBottleGame represents the game state
 type WaterBottleGame struct {
-	bottles       []Bottle // All bottles in the game
-	jars          []Bottle // All jars in the game (auxiliary containers)
-	N             int      // Total number of bottles
-	M             int      // Capacity of each bottle
-	J             int      // Number of empty bottles
-	K             int      // Number of different colors
-	JarCount      int      // Number of jars
-	JarCapacity   int      // Capacity of each jar
-	emptyCount    int      // Current number of empty bottles
-	emptyJarCount int      // Current number of empty jars
-	reverseSteps  []Move   // Record of reverse operations for validation
+	bottles          []Bottle      // All bottles in the game
+	jars             []Bottle      // All jars in the game (auxiliary containers)
+	bags             []Color       // Three bags with specific colors that collect completed bottles
+	collectedBottles []bool        // Track which bottles have been collected by bags (true = collected)
+	N                int           // Total number of bottles
+	M                int           // Capacity of each bottle
+	J                int           // Number of empty bottles
+	K                int           // Number of different colors
+	JarCount         int           // Number of jars
+	JarCapacity      int           // Capacity of each jar
+	UseBags          bool          // Whether to use the bag system
+	emptyCount       int           // Current number of empty bottles
+	emptyJarCount    int           // Current number of empty jars
+	reverseSteps     []Move        // Record of reverse operations for validation
+	currentOperation OperationType // Track current operation type
 }
 
 // NewWaterBottleGame creates a new game with given parameters
-func NewWaterBottleGame(N, M, J, K, JarCount, JarCapacity int) (*WaterBottleGame, error) {
+func NewWaterBottleGame(N, M, J, K, JarCount, JarCapacity int, UseBags bool) (*WaterBottleGame, error) {
 	if N <= J {
 		return nil, fmt.Errorf("total bottles (%d) must be greater than empty bottles (%d)", N, J)
 	}
@@ -60,16 +72,19 @@ func NewWaterBottleGame(N, M, J, K, JarCount, JarCapacity int) (*WaterBottleGame
 	}
 
 	game := &WaterBottleGame{
-		bottles:       make([]Bottle, N),
-		jars:          make([]Bottle, JarCount),
-		N:             N,
-		M:             M,
-		J:             J,
-		K:             K,
-		JarCount:      JarCount,
-		JarCapacity:   JarCapacity,
-		emptyCount:    J,
-		emptyJarCount: JarCount,
+		bottles:          make([]Bottle, N),
+		jars:             make([]Bottle, JarCount),
+		bags:             make([]Color, 3), // Always 3 bags
+		collectedBottles: make([]bool, N),  // Track collection status for each bottle
+		N:                N,
+		M:                M,
+		J:                J,
+		K:                K,
+		JarCount:         JarCount,
+		JarCapacity:      JarCapacity,
+		UseBags:          UseBags,
+		emptyCount:       J,
+		emptyJarCount:    JarCount,
 	}
 
 	// Initialize empty bottles
@@ -82,11 +97,21 @@ func NewWaterBottleGame(N, M, J, K, JarCount, JarCapacity int) (*WaterBottleGame
 		game.jars[i] = make(Bottle, 0, JarCapacity)
 	}
 
+	// Initialize bags if using bag system
+	if UseBags {
+		game.initializeBags()
+	}
+
 	return game, nil
 }
 
 // generateInitialState creates a solvable initial game state using reverse generation
 func (g *WaterBottleGame) generateInitialState() error {
+	// If using bags, force random generation
+	if g.UseBags {
+		return g.generateRandomState()
+	}
+
 	// Use default difficulty calculation
 	difficulty := g.calculateDifficulty()
 	return g.generateInitialStateWithSteps(difficulty)
@@ -207,6 +232,12 @@ func (g *WaterBottleGame) distributeWaterRandomly(waterPool []Color) error {
 
 	// Analyze the generated state
 	g.analyzeRandomState()
+
+	// Initialize bags if using bag system
+	if g.UseBags {
+		g.updateBagColors()
+		fmt.Println("   🎒 初始化袋子系统...")
+	}
 
 	return nil
 }
@@ -468,7 +499,8 @@ func (g *WaterBottleGame) tryReverseOperationWithRecord() bool {
 			// Perform the reverse move and test if it can be immediately reversed
 			if g.performSimplePour(sourceIdx, targetIdx, pourAmount) {
 				// Now try to reverse this operation using forward game rules
-				canReverse, actualMoved := g.Pour(targetIdx, sourceIdx)
+				// Use internal pour to avoid triggering bag collection during testing
+				canReverse, actualMoved := g.pourInternal(targetIdx, sourceIdx)
 
 				if canReverse && actualMoved == pourAmount {
 					// Check if we're back to the original state
@@ -576,7 +608,8 @@ func (g *WaterBottleGame) validateReverseSteps() error {
 		stepNum := len(g.reverseSteps) - i
 
 		// Apply the reverse of this move (from To back to From)
-		success, _ := g.Pour(move.To, move.From)
+		// Use internal pour to avoid triggering bag collection during validation
+		success, _ := g.pourInternal(move.To, move.From)
 		if !success {
 			fmt.Printf("   ❌ 第%d步还原失败: 从%d号瓶到%d号瓶\n", stepNum, move.To, move.From)
 			fmt.Printf("      原始逆向操作: 从%d号瓶倒%d单位%s色水到%d号瓶\n",
@@ -671,9 +704,27 @@ func getColorName(color Color) string {
 	return fmt.Sprintf("色%d", color)
 }
 
-// Pour performs water pouring between containers (bottles and jars)
+// Pour performs water pouring between containers (bottles and jars) - USER OPERATION
 // Container indices: 0 to N-1 are bottles, N to N+JarCount-1 are jars
 func (g *WaterBottleGame) Pour(fromContainer, toContainer int) (bool, int) {
+	return g.pourWithType(fromContainer, toContainer, UserOperation)
+}
+
+// pourInternal performs pour operation without triggering bag collection - INTERNAL OPERATION
+// This is used internally for testing/validation purposes
+func (g *WaterBottleGame) pourInternal(fromContainer, toContainer int) (bool, int) {
+	return g.pourWithType(fromContainer, toContainer, InternalOperation)
+}
+
+// pourWithType performs the actual pour operation with operation type tracking
+func (g *WaterBottleGame) pourWithType(fromContainer, toContainer int, opType OperationType) (bool, int) {
+	// Set operation type to track what's currently happening
+	prevOperation := g.currentOperation
+	g.currentOperation = opType
+	defer func() {
+		g.currentOperation = prevOperation
+	}()
+	// Use original N since bottles are not deleted, just marked as collected
 	totalContainers := g.N + g.JarCount
 
 	if fromContainer < 0 || fromContainer >= totalContainers ||
@@ -683,6 +734,16 @@ func (g *WaterBottleGame) Pour(fromContainer, toContainer int) (bool, int) {
 
 	if fromContainer == toContainer {
 		return false, 0 // Cannot pour to same container
+	}
+
+	// Check if trying to pour from/to collected bottles
+	if g.UseBags {
+		if fromContainer < g.N && g.collectedBottles[fromContainer] {
+			return false, 0 // Cannot pour from collected bottle
+		}
+		if toContainer < g.N && g.collectedBottles[toContainer] {
+			return false, 0 // Cannot pour to collected bottle
+		}
 	}
 
 	// Get source and target containers
@@ -773,7 +834,73 @@ func (g *WaterBottleGame) Pour(fromContainer, toContainer int) (bool, int) {
 		}
 	}
 
+	// Check if any bottles should be collected after pouring
+	// Only trigger collection for USER operations, not internal operations
+	if g.UseBags && opType == UserOperation {
+		g.checkAndCollectBottles()
+	}
+
 	return true, pourAmount
+}
+
+// GetPourFailureReason returns a detailed reason why a pour operation failed
+func (g *WaterBottleGame) GetPourFailureReason(fromContainer, toContainer int) string {
+	totalContainers := g.N + g.JarCount
+
+	if fromContainer < 0 || fromContainer >= totalContainers ||
+		toContainer < 0 || toContainer >= totalContainers {
+		return "容器编号无效"
+	}
+
+	if fromContainer == toContainer {
+		return "不能向同一个容器倒水"
+	}
+
+	// Check if trying to pour from/to collected bottles
+	if g.UseBags {
+		if fromContainer < g.N && g.collectedBottles[fromContainer] {
+			return fmt.Sprintf("%d号瓶已被袋子收集，无法从中倒水", fromContainer)
+		}
+		if toContainer < g.N && g.collectedBottles[toContainer] {
+			return fmt.Sprintf("%d号瓶已被袋子收集，无法向其倒水", toContainer)
+		}
+	}
+
+	// Get container info
+	var from, to *Bottle
+	var toCapacity int
+
+	if fromContainer < g.N {
+		from = &g.bottles[fromContainer]
+	} else {
+		from = &g.jars[fromContainer-g.N]
+	}
+
+	if toContainer < g.N {
+		to = &g.bottles[toContainer]
+		toCapacity = g.M
+	} else {
+		to = &g.jars[toContainer-g.N]
+		toCapacity = g.JarCapacity
+	}
+
+	if len(*from) == 0 {
+		return "源容器是空的"
+	}
+
+	if len(*to) == toCapacity {
+		return "目标容器已满"
+	}
+
+	if len(*to) > 0 {
+		fromTopColor := (*from)[len(*from)-1]
+		toTopColor := (*to)[len(*to)-1]
+		if fromTopColor != toTopColor {
+			return "顶层颜色不匹配"
+		}
+	}
+
+	return "未知原因"
 }
 
 // CheckPossibleMoves checks if there are any possible moves and returns detailed information
@@ -788,7 +915,8 @@ func (g *WaterBottleGame) CheckPossibleMoves() (bool, int, []string) {
 				// Save current state
 				originalState := g.copyGameState()
 
-				success, moved := g.Pour(from, to)
+				// Use internal pour to avoid triggering bag collection during testing
+				success, moved := g.pourInternal(from, to)
 				if success {
 					possibleMoves++
 					// Create move description
@@ -921,27 +1049,50 @@ func (g *WaterBottleGame) analyzeDeadlock() {
 
 // IsWon checks if the game is won
 func (g *WaterBottleGame) IsWon() bool {
-	nonEmptyBottles := 0
-	for _, bottle := range g.bottles {
-		if len(bottle) == 0 {
-			continue
-		}
+	if g.UseBags {
+		// With bags, win when all water has been collected or is in completed bottles
+		totalWater := (g.N - g.J) * g.M
+		collectedCount := 0
+		completedBottleWater := 0
 
-		// Check if bottle is full and single-colored
-		if len(bottle) != g.M {
-			return false
-		}
-
-		color := bottle[0]
-		for _, c := range bottle {
-			if c != color {
-				return false
+		for i, bottle := range g.bottles {
+			if g.collectedBottles[i] {
+				collectedCount++
+			} else if len(bottle) > 0 {
+				// Must be full and single-colored
+				if len(bottle) != g.M || !g.isSingleColor(bottle) {
+					return false
+				}
+				completedBottleWater += g.M
 			}
 		}
-		nonEmptyBottles++
-	}
 
-	return nonEmptyBottles == g.N-g.J
+		// Win if all water is either collected or in completed bottles
+		return (collectedCount*g.M)+completedBottleWater == totalWater
+	} else {
+		// Original win condition without bags
+		nonEmptyBottles := 0
+		for _, bottle := range g.bottles {
+			if len(bottle) == 0 {
+				continue
+			}
+
+			// Check if bottle is full and single-colored
+			if len(bottle) != g.M {
+				return false
+			}
+
+			color := bottle[0]
+			for _, c := range bottle {
+				if c != color {
+					return false
+				}
+			}
+			nonEmptyBottles++
+		}
+
+		return nonEmptyBottles == g.N-g.J
+	}
 }
 
 // GetState returns the current game state for display
@@ -958,8 +1109,19 @@ func (g *WaterBottleGame) GetState() [][]Color {
 func (g *WaterBottleGame) PrintState() {
 	colorEmojis := []string{"🔴", "🔵", "🟢", "🟡", "🟠", "🟣", "🟤", "⚫", "⚪", "🔸"}
 
-	fmt.Printf("\n🎮 当前游戏状态 (瓶数:%d, 瓶容量:%d, 空瓶:%d, 罐数:%d, 罐容量:%d, 颜色数:%d):\n",
-		g.N, g.M, g.J, g.JarCount, g.JarCapacity, g.K)
+	if g.UseBags {
+		collectedCount := 0
+		for _, collected := range g.collectedBottles {
+			if collected {
+				collectedCount++
+			}
+		}
+		fmt.Printf("\n🎮 当前游戏状态 (瓶数:%d, 瓶容量:%d, 空瓶:%d, 罐数:%d, 罐容量:%d, 颜色数:%d, 已收集:%d):\n",
+			g.N, g.M, g.J, g.JarCount, g.JarCapacity, g.K, collectedCount)
+	} else {
+		fmt.Printf("\n🎮 当前游戏状态 (瓶数:%d, 瓶容量:%d, 空瓶:%d, 罐数:%d, 罐容量:%d, 颜色数:%d):\n",
+			g.N, g.M, g.J, g.JarCount, g.JarCapacity, g.K)
+	}
 
 	// Adjust separator length based on bottle count
 	separatorLength := min(80, max(50, g.N*8))
@@ -967,40 +1129,46 @@ func (g *WaterBottleGame) PrintState() {
 
 	for i, bottle := range g.bottles {
 		fmt.Printf("%d号瓶: ", i)
-		if len(bottle) == 0 {
-			fmt.Print("[空瓶子]")
+
+		// Check if bottle was collected
+		if g.UseBags && g.collectedBottles[i] {
+			fmt.Print("🎒已被袋子收集")
 		} else {
-			fmt.Print("[")
-			for j, color := range bottle {
-				if j > 0 {
-					fmt.Print(" ")
+			if len(bottle) == 0 {
+				fmt.Print("[空瓶子]")
+			} else {
+				fmt.Print("[")
+				for j, color := range bottle {
+					if j > 0 {
+						fmt.Print(" ")
+					}
+					if int(color) < len(colorEmojis) {
+						fmt.Printf("%s", colorEmojis[color])
+					} else {
+						fmt.Printf("%d", color)
+					}
 				}
-				if int(color) < len(colorEmojis) {
-					fmt.Printf("%s", colorEmojis[color])
-				} else {
-					fmt.Printf("%d", color)
-				}
+				fmt.Print("]")
 			}
-			fmt.Print("]")
-		}
 
-		// 显示容量条
-		filled := len(bottle)
-		empty := g.M - filled
+			// 显示容量条
+			filled := len(bottle)
+			empty := g.M - filled
 
-		// 防止负数导致panic
-		if empty < 0 {
-			empty = 0
-			fmt.Printf(" ⚠️OVERFLOW⚠️ ")
-		}
+			// 防止负数导致panic
+			if empty < 0 {
+				empty = 0
+				fmt.Printf(" ⚠️OVERFLOW⚠️ ")
+			}
 
-		fmt.Printf(" %s", strings.Repeat("█", min(filled, g.M)))
-		fmt.Printf("%s", strings.Repeat("░", empty))
-		fmt.Printf(" (%d/%d)", filled, g.M)
+			fmt.Printf(" %s", strings.Repeat("█", min(filled, g.M)))
+			fmt.Printf("%s", strings.Repeat("░", empty))
+			fmt.Printf(" (%d/%d)", filled, g.M)
 
-		// 检查是否是完成的瓶子（满瓶且单色）
-		if len(bottle) == g.M && g.isSingleColor(bottle) {
-			fmt.Print(" ✅完成")
+			// 检查是否是完成的瓶子（满瓶且单色）
+			if len(bottle) == g.M && g.isSingleColor(bottle) {
+				fmt.Print(" ✅完成")
+			}
 		}
 		fmt.Println()
 	}
@@ -1046,16 +1214,57 @@ func (g *WaterBottleGame) PrintState() {
 		}
 	}
 
+	// Display bags if using bag system
+	if g.UseBags {
+		fmt.Println()
+		fmt.Print("🎒 袋子状态: ")
+		activeBags := 0
+		for i, bagColor := range g.bags {
+			if bagColor >= 0 {
+				if activeBags > 0 {
+					fmt.Print("  ")
+				}
+				if int(bagColor) < len(colorEmojis) {
+					fmt.Printf("%d号袋子:%s%s色", i, colorEmojis[bagColor], getColorName(bagColor))
+				} else {
+					fmt.Printf("%d号袋子:%s色", i, getColorName(bagColor))
+				}
+				activeBags++
+			}
+		}
+		if activeBags == 0 {
+			fmt.Print("无活跃袋子")
+		}
+		fmt.Println()
+	}
+
 	fmt.Println(strings.Repeat("━", separatorLength))
 	fmt.Printf("📊 空瓶子数量: %d", g.emptyCount)
 	if g.JarCount > 0 {
 		fmt.Printf(", 空罐子数量: %d", g.emptyJarCount)
 	}
+	if g.UseBags {
+		collectedCount := 0
+		for _, collected := range g.collectedBottles {
+			if collected {
+				collectedCount++
+			}
+		}
+		fmt.Printf(", 已收集瓶子: %d", collectedCount)
+	}
 	fmt.Println()
 	if g.IsWon() {
-		fmt.Println("🎉 游戏胜利！所有瓶子都完成了！🎉")
+		if g.UseBags {
+			fmt.Println("🎉 游戏胜利！所有水都被收集完毕！🎉")
+		} else {
+			fmt.Println("🎉 游戏胜利！所有瓶子都完成了！🎉")
+		}
 	} else {
-		fmt.Println("🎯 继续加油！目标：让每个瓶子都装满单一颜色")
+		if g.UseBags {
+			fmt.Println("🎯 继续加油！目标：让袋子收集所有颜色的水")
+		} else {
+			fmt.Println("🎯 继续加油！目标：让每个瓶子都装满单一颜色")
+		}
 	}
 	fmt.Println()
 }
@@ -1183,6 +1392,204 @@ func (g *WaterBottleGame) ShuffleWater() {
 	}
 
 	fmt.Printf("   ✅ 打乱完成！空瓶数量：%d\n", g.emptyCount)
+
+	// Update bags if using bag system
+	if g.UseBags {
+		g.updateBagColors()
+	}
+}
+
+// initializeBags sets up the initial bag colors based on available colors
+func (g *WaterBottleGame) initializeBags() {
+	availableColors := g.getAvailableColors()
+
+	// Initialize 3 bags with first 3 available colors
+	for i := 0; i < 3; i++ {
+		if i < len(availableColors) {
+			g.bags[i] = availableColors[i]
+		} else {
+			g.bags[i] = Color(-1) // Invalid color means no bag
+		}
+	}
+}
+
+// getAvailableColors returns colors that exist in non-collected bottles and jars
+func (g *WaterBottleGame) getAvailableColors() []Color {
+	colorSet := make(map[Color]bool)
+
+	// Check all bottles
+	for i, bottle := range g.bottles {
+		// Skip collected bottles
+		if g.UseBags && g.collectedBottles[i] {
+			continue
+		}
+
+		// Include ALL non-collected bottles (both completed and non-completed)
+		// This ensures completed bottles can still be collected by bags
+		for _, color := range bottle {
+			colorSet[color] = true
+		}
+	}
+
+	// Check jars too
+	for _, jar := range g.jars {
+		for _, color := range jar {
+			colorSet[color] = true
+		}
+	}
+
+	// Convert to slice
+	var colors []Color
+	for color := range colorSet {
+		colors = append(colors, color)
+	}
+
+	return colors
+}
+
+// updateBagColors updates bag colors based on current game state
+func (g *WaterBottleGame) updateBagColors() {
+	g.updateBagColorsWithoutCollection()
+}
+
+// updateBagColorsWithoutCollection updates bag colors without triggering collection
+func (g *WaterBottleGame) updateBagColorsWithoutCollection() {
+	availableColors := g.getAvailableColors()
+
+	// Calculate how many bags we can have
+	// 1. 最多3个袋子
+	// 2. 不能超过可用颜色数量
+	// 3. 每个颜色至少需要一瓶的水量才能有对应的袋子
+	totalWaterUnits := g.getTotalWaterUnits()
+	maxBagsByWater := totalWaterUnits / g.M
+	maxBags := min(3, min(len(availableColors), maxBagsByWater))
+
+	// Update bag colors - 只设置需要的袋子数量
+	for i := 0; i < 3; i++ {
+		if i < maxBags {
+			g.bags[i] = availableColors[i]
+		} else {
+			g.bags[i] = Color(-1) // No bag (invalid color)
+		}
+	}
+}
+
+// getTotalWaterUnits returns total water units in non-collected bottles and jars
+func (g *WaterBottleGame) getTotalWaterUnits() int {
+	total := 0
+
+	// Count water in ALL non-collected bottles (including completed ones)
+	for i, bottle := range g.bottles {
+		// Skip collected bottles
+		if g.UseBags && g.collectedBottles[i] {
+			continue
+		}
+
+		// Count water in all non-collected bottles
+		total += len(bottle)
+	}
+
+	// Count water in jars
+	for _, jar := range g.jars {
+		total += len(jar)
+	}
+
+	return total
+}
+
+// checkAndCollectBottles checks if any completed bottles should be collected by bags
+// This function should ONLY be called after a successful pour operation
+func (g *WaterBottleGame) checkAndCollectBottles() bool {
+	if !g.UseBags {
+		return false
+	}
+
+	anyCollected := false
+
+	// Keep checking and collecting until no more bottles can be collected
+	for {
+		// Step 1: Check if current bags can collect any completed bottles
+		var collectableBottles []struct {
+			bottleIdx int
+			bagIdx    int
+			color     Color
+		}
+
+		// Check each bottle for collection eligibility with CURRENT bags
+		for i, bottle := range g.bottles {
+			// Skip already collected bottles
+			if g.collectedBottles[i] {
+				continue
+			}
+
+			// Check if bottle is completed (full and single-colored)
+			isFull := len(bottle) == g.M
+			isSingle := g.isSingleColor(bottle)
+
+			if isFull && isSingle {
+				bottleColor := bottle[0]
+
+				// Check if any CURRENT bag matches this color
+				for bagIdx, bagColor := range g.bags {
+					if bagColor >= 0 && bagColor == bottleColor {
+						collectableBottles = append(collectableBottles, struct {
+							bottleIdx int
+							bagIdx    int
+							color     Color
+						}{i, bagIdx, bottleColor})
+						break // Only one bag can collect this bottle
+					}
+				}
+			}
+		}
+
+		// Step 2: If we found collectable bottles, collect them
+		if len(collectableBottles) > 0 {
+			for _, item := range collectableBottles {
+				fmt.Printf("🎒 袋子收集了%d号瓶子（%s色）\n",
+					item.bottleIdx, getColorName(item.color))
+
+				// Mark bottle as collected (but keep it in the array)
+				g.collectedBottles[item.bottleIdx] = true
+
+				// Clear the bottle content but keep the slot
+				g.bottles[item.bottleIdx] = make(Bottle, 0, g.M)
+			}
+
+			anyCollected = true
+		}
+
+		// Step 3: After collection, check if we need to update bag colors
+		oldBags := make([]Color, 3)
+		copy(oldBags, g.bags[:])
+
+		g.updateBagColorsWithoutCollection()
+
+		// Step 4: Check if bag colors changed (new bags were created)
+		bagsChanged := false
+		for i := 0; i < 3; i++ {
+			if oldBags[i] != g.bags[i] {
+				bagsChanged = true
+				break
+			}
+		}
+
+		// Step 5: If no bottles were collected and bags didn't change, we're done
+		if len(collectableBottles) == 0 && !bagsChanged {
+			break
+		}
+
+		// Continue the loop if:
+		// - We collected bottles (there might be more to collect)
+		// - Bag colors changed (new bags might collect more bottles)
+	}
+
+	return anyCollected
+}
+
+// ResetOperationState resets the current operation state to allow new operations
+func (g *WaterBottleGame) ResetOperationState() {
+	g.currentOperation = UserOperation // Reset to default state
 }
 
 // Helper function to check if a bottle contains only one color
